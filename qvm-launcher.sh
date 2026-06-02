@@ -18,6 +18,59 @@ detect_audio() {
     fi
 }
 
+# ── Install shell completion ─────────────────────────────────────────────────
+install_completion() {
+    # Determine the real user's home directory (handles sudo)
+    if [ -n "$SUDO_USER" ]; then
+        USER_HOME=$(eval echo ~$SUDO_USER)
+    else
+        USER_HOME=$HOME
+    fi
+
+    # Detect the user's shell
+    SHELL_NAME=$(basename "$SHELL")
+    echo "Detected shell: $SHELL_NAME"
+
+    case "$SHELL_NAME" in
+        bash)
+            COMPLETION_DIR="$USER_HOME/.local/share/bash-completion/completions"
+            mkdir -p "$COMPLETION_DIR"
+            cp qvm-completion.bash "$COMPLETION_DIR/qvm-launcher"
+            echo "Bash completion installed to: $COMPLETION_DIR/qvm-launcher"
+            echo "You may need to restart your shell or run:"
+            echo "  source $COMPLETION_DIR/qvm-launcher"
+            ;;
+        zsh)
+            COMPLETION_DIR="$USER_HOME/.zsh/completion"
+            mkdir -p "$COMPLETION_DIR"
+            cp qvm-completion.zsh "$COMPLETION_DIR/_qvm-launcher"
+            echo "Zsh completion installed to: $COMPLETION_DIR/_qvm-launcher"
+            echo "Add the following to your .zshrc if not already present:"
+            echo "  fpath=($COMPLETION_DIR \$fpath)"
+            echo "  autoload -Uz compinit && compinit"
+            ;;
+        fish)
+            COMPLETION_DIR="$USER_HOME/.config/fish/completions"
+            mkdir -p "$COMPLETION_DIR"
+            # Note: We don't have a native fish completion yet.
+            # As a workaround, we can suggest using bass to use the bash completion.
+            # For now, we'll copy the bash completion with a .fish extension and note it may need adaptation.
+            cp qvm-completion.bash "$COMPLETION_DIR/qvm-launcher.fish"
+            echo "Fish completion installed to: $COMPLETION_DIR/qvm-launcher.fish"
+            echo "Note: This is a bash completion file placed in the fish completion directory."
+            echo "For best results, consider using the 'bass' tool to use bash completions in fish:"
+            echo "  bass source $COMPLETION_DIR/qvm-launcher.fish"
+            echo "Or create a native fish completion script."
+            ;;
+        *)
+            echo "Error: Unsupported shell '$SHELL_NAME' for automatic completion installation."
+            echo "Supported shells: bash, zsh, fish"
+            echo "You can manually install completion from qvm-completion.bash or qvm-completion.zsh"
+            return 1
+            ;;
+    esac
+}
+
 # ── Detect host threads per core ─────────────────────────────────────────────
 get_host_threads_per_core() {
     local threads_per_core=2  # default
@@ -54,14 +107,84 @@ get_host_threads_per_core() {
     echo "$threads_per_core"
 }
 
+# ── Save VM configuration ────────────────────────────────────────────────────
+save_config() {
+    local img_path="$1"
+    local config_file="${img_path}.conf"
+    
+    # Save current configuration
+    {
+        echo "RAM=$RAM"
+        echo "STORAGE=$STORAGE"
+        echo "CORES=$CORES"
+        echo "THREADS=$THREADS"
+    } > "$config_file"
+    
+    echo "Configuration saved to: $config_file"
+}
+
+# ── Load VM configuration ────────────────────────────────────────────────────
+load_config() {
+    local img_path="$1"
+    local config_file="${img_path}.conf"
+    
+    if [ -f "$config_file" ]; then
+        # Source the config file to load variables
+        # shellcheck disable=SC1090
+        . "$config_file"
+        echo "Loaded configuration from: $config_file"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ── List available VMs ───────────────────────────────────────────────────────
+list_vms() {
+    # Find all subdirectories that contain a .qcow2 file with the same name
+    local vm_dirs=()
+    while IFS= read -r -d '' dir; do
+        if [ -f "${dir}/$(basename "${dir}").qcow2" ]; then
+            vm_dirs+=("$(basename "${dir}")")
+        fi
+    done < <(find . -maxdepth 1 -type d ! -name ".*" ! -name ".git" -print0 2>/dev/null | sort -z)
+    
+    if [ ${#vm_dirs[@]} -eq 0 ]; then
+        echo "No VMs found. Create one with: $0 -f <vm-name> <installer.iso>"
+    else
+        echo "Available VMs:"
+        for vm in "${vm_dirs[@]}"; do
+            echo "  - $vm"
+        done
+    fi
+}
+
+# ── Resolve VM name to path ─────────────────────────────────────────────────
+resolve_vm_path() {
+    local vm_name="$1"
+    local vm_path="./${vm_name}/${vm_name}.qcow2"
+    
+    if [ -f "$vm_path" ]; then
+        echo "$vm_path"
+        return 0
+    else
+        return 1
+    fi
+}
+
 # ── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
     echo "Usage:"
-    echo "  $0 <vm.qcow2>"
-    echo "      Boot existing VM"
+    echo "  $0 <vm-name>"
+    echo "      Boot existing VM (searches in ./<vm-name>/<vm-name>.qcow2)"
     echo
-    echo "  $0 -f <vm.qcow2> <installer.iso>"
+    echo "  $0 -f <vm-name> <installer.iso>"
     echo "      Create disk if needed and boot installer ISO"
+    echo
+    echo "  $0 --list"
+    echo "      List all available VMs"
+    echo
+    echo "Tab completion: Install qvm-completion.bash for bash autocompletion of VM names"
     exit 1
 }
 
@@ -141,22 +264,34 @@ configure_vm() {
 
 # ── Args ─────────────────────────────────────────────────────────────────────
 FORMAT_MODE=false
-IMG=""
+VM_NAME=""
 ISO=""
+IMG=""
 
 case "$1" in
     -f|--format)
         FORMAT_MODE=true
-        IMG="$(realpath "$2" 2>/dev/null)"
+        VM_NAME="$2"
         ISO="$(realpath "$3" 2>/dev/null)"
-        if [ -z "$IMG" ] || [ -z "$ISO" ]; then
-            echo "Error: missing VM image or ISO."
+        if [ -z "$VM_NAME" ] || [ -z "$ISO" ]; then
+            echo "Error: missing VM name or ISO."
             show_help
         fi
         if [ ! -f "$ISO" ]; then
             echo "Error: ISO file not found: $ISO"
             exit 1
         fi
+        # Resolve/create VM directory and set IMG path
+        mkdir -p "./${VM_NAME}"
+        IMG="./${VM_NAME}/${VM_NAME}.qcow2"
+        ;;
+    --list)
+        list_vms
+        exit 0
+        ;;
+    --install-completion)
+        install_completion
+        exit 0
         ;;
     --help|-h)
         show_help
@@ -165,10 +300,15 @@ case "$1" in
         show_help
         ;;
     *)  
-        IMG="$(realpath "$1" 2>/dev/null)"
-        if [ -z "$IMG" ]; then
-            echo "Error: invalid path: $1"
-            show_help
+        VM_NAME="$1"
+        # Resolve VM name to actual path
+        if IMG="$(resolve_vm_path "$VM_NAME")"; then
+            # Found, continue
+            :
+        else
+            echo "Error: VM '$VM_NAME' not found."
+            list_vms
+            exit 1
         fi
         ;;
 esac
@@ -264,24 +404,50 @@ fi
 # Get VM configuration - only prompt when creating/installing new VM
 if [ "$FORMAT_MODE" = true ]; then
     configure_vm
+    # Save configuration for future use
+    save_config "$IMG"
 else
-    # Use default values when booting existing VM (no prompting)
-    DEFAULT_RAM=8192      # 8GB in MB
-    DEFAULT_STORAGE=100   # 100GB (not used for existing VM but set for consistency)
-    DEFAULT_CORES=4
-    
-    RAM=$DEFAULT_RAM
-    STORAGE=$DEFAULT_STORAGE
-    CORES=$DEFAULT_CORES
-    
-    # Determine threads per core from host (no prompt)
-    THREADS=$(get_host_threads_per_core)
-    
-    echo "=== Booting Existing VM (using defaults) ==="
-    echo "  RAM: $((RAM/1024)) GB"
-  echo "  Storage: Existing disk will be used"
-    echo "  CPU: $CORES cores × $THREADS threads"
-    echo ""
+    # Try to load saved configuration for existing VM
+    if load_config "$IMG"; then
+        echo "=== Booting Existing VM (using saved config) ==="
+        echo "  RAM: $((RAM/1024)) GB"
+        echo "  Storage: Existing disk will be used"
+        echo "  CPU: $CORES cores × $THREADS threads"
+        echo ""
+    else
+        # No saved config found - ask user what to do
+        echo "=== No saved configuration found for this VM ==="
+        echo "Choose an option:"
+        echo "  1) Boot with default settings (8GB RAM, 4 cores)"
+        echo "  2) Configure custom settings for this boot"
+        read -p "Enter choice (1 or 2, default: 1): " choice
+        
+        if [ "$choice" = "2" ]; then
+            configure_vm
+            # Ask if user wants to save this config for future boots
+            read -p "Save this configuration for future boots? (y/N): " save_choice
+            if [[ "$save_choice" =~ ^[Yy]$ ]]; then
+                save_config "$IMG"
+            fi
+        else
+            # Use default values
+            DEFAULT_RAM=8192      # 8GB in MB
+            DEFAULT_CORES=4
+            
+            RAM=$DEFAULT_RAM
+            # STORAGE is ignored for existing VMs (use actual disk size)
+            CORES=$DEFAULT_CORES
+            
+            # Determine threads per core from host (no prompt)
+            THREADS=$(get_host_threads_per_core)
+            
+            echo "=== Booting Existing VM (using defaults) ==="
+            echo "  RAM: $((RAM/1024)) GB"
+            echo "  Storage: Existing disk will be used"
+            echo "  CPU: $CORES cores × $THREADS threads"
+            echo ""
+        fi
+    fi
 fi
 
 # ── Disk setup ───────────────────────────────────────────────────────────────

@@ -1,0 +1,8 @@
+# QVM Launcher - QEMU Virtual Machine Launcher
+
+# Ignore large ISO and QCOW2 files
+*.iso
+*.qcow2
+*.conf
+*~
+.*.swp
