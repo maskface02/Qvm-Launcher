@@ -35,19 +35,64 @@ install_completion() {
         bash)
             COMPLETION_DIR="$USER_HOME/.local/share/bash-completion/completions"
             mkdir -p "$COMPLETION_DIR"
-            cp qvm-completion.bash "$COMPLETION_DIR/qvm-launcher"
+            cp AutoCompletion/qvm-completion.bash "$COMPLETION_DIR/qvm-launcher"
             echo "Bash completion installed to: $COMPLETION_DIR/qvm-launcher"
-            echo "You may need to restart your shell or run:"
-            echo "  source $COMPLETION_DIR/qvm-launcher"
+            
+            # Auto-update .bashrc if needed
+            RC_FILE="$USER_HOME/.bashrc"
+            if [ -f "$RC_FILE" ]; then
+                if ! grep -qi "QVM Launcher completion" "$RC_FILE"; then
+                    echo "" >> "$RC_FILE"
+                    echo "# QVM Launcher completion" >> "$RC_FILE"
+                    echo "source $COMPLETION_DIR/qvm-launcher" >> "$RC_FILE"
+                    echo "Added completion to $RC_FILE"
+                else
+                    echo "Completion already configured in $RC_FILE"
+                fi
+            else
+                echo "Creating $RC_FILE with completion"
+                echo "# QVM Launcher completion" > "$RC_FILE"
+                echo "source $COMPLETION_DIR/qvm-launcher" >> "$RC_FILE"
+            fi
             ;;
         zsh)
-            COMPLETION_DIR="$USER_HOME/.zsh/completion"
-            mkdir -p "$COMPLETION_DIR"
-            cp qvm-completion.zsh "$COMPLETION_DIR/_qvm-launcher"
-            echo "Zsh completion installed to: $COMPLETION_DIR/_qvm-launcher"
-            echo "Add the following to your .zshrc if not already present:"
-            echo "  fpath=($COMPLETION_DIR \$fpath)"
-            echo "  autoload -Uz compinit && compinit"
+            # Check if Oh My Zsh is installed
+            if [ -d "$USER_HOME/.oh-my-zsh" ]; then
+                # Use OMZ's custom completions directory (auto-added to fpath by OMZ)
+                OMZ_COMPLETION_DIR="$USER_HOME/.oh-my-zsh/custom/completions"
+                mkdir -p "$OMZ_COMPLETION_DIR"
+                if [ -f "$OMZ_COMPLETION_DIR/_qvm-launcher" ]; then
+                    echo "Completion already installed to $OMZ_COMPLETION_DIR/_qvm-launcher"
+                else
+                    cp AutoCompletion/qvm-completion.zsh "$OMZ_COMPLETION_DIR/_qvm-launcher"
+                    echo "Zsh completion installed to: $OMZ_COMPLETION_DIR/_qvm-launcher"
+                    echo "Note: Open a new terminal or run 'exec zsh' for completion to take effect."
+                fi
+            else
+                # Non-OMZ: add to standard user completion directory
+                COMPLETION_DIR="$USER_HOME/.zsh/completion"
+                mkdir -p "$COMPLETION_DIR"
+                cp AutoCompletion/qvm-completion.zsh "$COMPLETION_DIR/_qvm-launcher"
+                echo "Zsh completion installed to: $COMPLETION_DIR/_qvm-launcher"
+
+                # Auto-update .zshrc if needed (only fpath, compinit handled by zsh framework or user)
+                RC_FILE="$USER_HOME/.zshrc"
+                if [ -f "$RC_FILE" ]; then
+                    if ! grep -qi "QVM Launcher completion" "$RC_FILE"; then
+                        echo "" >> "$RC_FILE"
+                        echo "# QVM Launcher completion" >> "$RC_FILE"
+                        echo "fpath=($COMPLETION_DIR \$fpath)" >> "$RC_FILE"
+                        echo "Added completion to $RC_FILE"
+                    else
+                        echo "Completion already configured in $RC_FILE"
+                    fi
+                else
+                    echo "Creating $RC_FILE with completion"
+                    echo "# QVM Launcher completion" > "$RC_FILE"
+                    echo "fpath=($COMPLETION_DIR \$fpath)" >> "$RC_FILE"
+                fi
+                echo "Note: Open a new terminal or run 'exec zsh' for completion to take effect."
+            fi
             ;;
         fish)
             COMPLETION_DIR="$USER_HOME/.config/fish/completions"
@@ -55,7 +100,7 @@ install_completion() {
             # Note: We don't have a native fish completion yet.
             # As a workaround, we can suggest using bass to use the bash completion.
             # For now, we'll copy the bash completion with a .fish extension and note it may need adaptation.
-            cp qvm-completion.bash "$COMPLETION_DIR/qvm-launcher.fish"
+            cp AutoCompletion/qvm-completion.bash "$COMPLETION_DIR/qvm-launcher.fish"
             echo "Fish completion installed to: $COMPLETION_DIR/qvm-launcher.fish"
             echo "Note: This is a bash completion file placed in the fish completion directory."
             echo "For best results, consider using the 'bass' tool to use bash completions in fish:"
@@ -63,7 +108,7 @@ install_completion() {
             echo "Or create a native fish completion script."
             ;;
         *)
-            echo "Error: Unsupported shell '$SHELL_NAME' for automatic completion installation."
+            echo "Error: Unsupported shell  for automatic completion installation."
             echo "Supported shells: bash, zsh, fish"
             echo "You can manually install completion from qvm-completion.bash or qvm-completion.zsh"
             return 1
@@ -184,7 +229,10 @@ show_help() {
     echo "  $0 --list"
     echo "      List all available VMs"
     echo
-    echo "Tab completion: Install qvm-completion.bash for bash autocompletion of VM names"
+    echo "  $0 --install-completion"
+    echo "      Install shell autocompletion for bash/zsh/fish (auto-detected)"
+    echo
+    echo "Tab completion: After installation, tab-complete VM names in your shell"
     exit 1
 }
 

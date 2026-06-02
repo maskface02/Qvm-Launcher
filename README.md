@@ -26,12 +26,18 @@ List available VMs:
 ./qvm-launcher.sh --list
 ```
 
+Install shell autocompletion:
+```bash
+./qvm-launcher.sh --install-completion
+```
+Installs completion for bash, zsh, or fish (auto-detected).
+
 ## Features
 - Interactive configuration for RAM, storage, CPU cores (only when creating VM)
 - Auto-detects host threads per core (no prompt)
 - Saves VM configuration for consistent boots
 - SPICE support for clipboard and display resolution
-- Shell autocompletion (bash/zsh/fish) via `./qvm-launcher.sh --install-completion`
+- Shell autocompletion (bash/zsh/fish)
 
 ## SPICE Guest Agent
 For clipboard and dynamic resolution, install the spice-vdagent inside the VM:
