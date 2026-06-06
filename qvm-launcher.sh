@@ -528,16 +528,20 @@ trap cleanup EXIT
 QEMU_CMD=(
     qemu-system-x86_64
     -enable-kvm
+    -machine q35,accel=kvm,kernel_irqchip=on
     -m $RAM
     -cpu host
     # Fixed CPU topology to avoid hyperthreading warnings on AMD
     -smp sockets=1,cores=$CORES,threads=$THREADS,maxcpus=$((CORES * THREADS))
 
-    # QXL display device optimized for high resolution SPICE support
-    -device qxl-vga,ram_size_mb=512,vgamem_mb=128,surfaces=2048
+    # I/O thread for disk operations (offloads from main thread)
+    -object iothread,id=iothread0
+
+    # QXL display — required by spice-vdagent for auto-resize
+    -device qxl-vga,ram_size_mb=256,vgamem_mb=64
     -display none
 
-    # SPICE agent for clipboard and better resolution support
+    # SPICE server for display + clipboard
     -spice unix=on,addr="${SPICE_SOCK}",disable-ticketing=on
 
     # vdagent clipboard channel
@@ -553,18 +557,29 @@ QEMU_CMD=(
     # USB
     -device qemu-xhci
 
+    # Absolute pointing device — lets mouse leave VM window freely
+    -device virtio-tablet-pci
+
+    # Dynamic memory management
+    -device virtio-balloon-pci
+
+    # Better guest clock sync
+    -rtc base=localtime,clock=host
+
     -serial mon:stdio
 )
 
 if [ "$FORMAT_MODE" = true ]; then
     QEMU_CMD+=(
-        -drive file="$IMG",format=qcow2,if=virtio
+        -drive file="$IMG",format=qcow2,if=none,id=drive0,cache=none,aio=io_uring,discard=unmap
+        -device virtio-blk-pci,drive=drive0,iothread=iothread0
         -cdrom "$ISO"
         -boot d
     )
 else
     QEMU_CMD+=(
-        -drive file="$IMG",format=qcow2,if=virtio
+        -drive file="$IMG",format=qcow2,if=none,id=drive0,cache=none,aio=io_uring,discard=unmap
+        -device virtio-blk-pci,drive=drive0,iothread=iothread0
     )
 fi
 
@@ -589,14 +604,24 @@ fi
 
 echo "VM running (PID: ${QEMU_PID}) — opening remote-viewer..."
 echo ""
-echo "IMPORTANT: For clipboard copy-paste and optimal resolution support, please install the spice-vdagent package inside the VM and start the service."
-echo "In the VM, you can run:"
-echo "  sudo pacman -S spice-vdagent   (for Arch Linux)"
+echo "IMPORTANT: For clipboard copy-paste and auto-resize, install spice-vdagent in the VM:"
+echo "  sudo pacman -S spice-vdagent   (Arch Linux)"
 echo "  sudo systemctl enable --now spice-vdagent.service"
 echo ""
 
-# remote-viewer is now the main window — script blocks here until it closes
-remote-viewer --full-screen "spice+unix://${SPICE_SOCK}"
+remote-viewer --title "QVM - ${VM_NAME}" "spice+unix://${SPICE_SOCK}" &
 
-# remote-viewer closed — shut down QEMU too
+RV_PID=$!
+
+# Resize window once to target resolution (avoids --auto-resize constant redraws)
+if command -v xdotool &>/dev/null; then
+    sleep 2
+    WIN_ID=$(xdotool search --name "QVM - ${VM_NAME}" 2>/dev/null | tail -1)
+    if [ -n "$WIN_ID" ]; then
+        xdotool windowsize "$WIN_ID" "${VM_GEOMETRY:-1920x1080}" 2>/dev/null
+    fi
+fi
+
+wait $RV_PID
+
 kill "${QEMU_PID}" 2>/dev/null
