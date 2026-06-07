@@ -44,4 +44,4 @@ _qvm_launcher() {
 }
 
 # Register the completion function
-complete -F _qvm_launcher qvm-launcher.sh
+complete -F _qvm_launcher qvm-launcher-sdl.sh

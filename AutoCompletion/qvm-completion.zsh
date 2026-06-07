@@ -1,4 +1,4 @@
-#compdef qvm-launcher.sh
+#compdef qvm-launcher-sdl.sh
 
 _qvm_launcher() {
     local -a vm_names
